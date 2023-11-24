@@ -1,0 +1,91 @@
+// Importing Dependencies
+use std::collections::HashMap;
+use std::str::FromStr;
+use chrono::prelude::*;
+use dfn_candid::candid_one;
+use dfn_core::{over, over_async};
+use ic_base_types::PrincipalId;
+use ic_cdk::api;
+use ic_cdk_macros::*;
+
+// Type Definitions
+type EventId = u32;
+type Timestamp = u64;
+
+// Struct representing an Event
+#[derive(CandidType, Clone, Deserialize)]
+struct Event {
+    name: String,
+    timestamp: Timestamp,
+}
+
+// Function to parse a date string into a Timestamp
+fn parse_date(date: &str) -> Result<Timestamp, &'static str> {
+    match NaiveDate::from_str(date) {
+        Ok(nd) => Ok(nd.and_hms(0, 0, 0).timestamp() as Timestamp),
+        Err(_) => Err("Failed to parse date. Expected format: YYYY-MM-DD"),
+    }
+}
+
+// Struct representing an Event with duration
+#[derive(CandidType, Clone, Deserialize)]
+struct EventWithDuration {
+    name: String,
+    start_date: String,
+    duration: u32,
+}
+
+// Function to validate event duration
+fn validate_duration(start_date: &str, duration: u32) -> Result<(), &'static str> {
+    if duration > 31 {
+        return Err("Duration must be less than or equal to 31 days.");
+    }
+    match parse_date(start_date) {
+        Ok(_) => Ok(()),
+        Err(msg) => Err(msg),
+    }
+}
+
+// Query function to get a list of events
+#[query(name = "getEvents")]
+fn get_events() -> Vec<Event> {
+    let mut events: Vec<Event> = Vec::new();
+    // Iterate over stored data and convert it into Event structs
+    for (name, timestamp) in &api::read() {
+        events.push(Event {
+            name: name.to_string(),
+            timestamp: *timestamp,
+        });
+    }
+    events
+}
+
+// Update function to add an event
+#[update(name = "addEvent")]
+fn add_event(event: EventWithDuration) -> EventId {
+    // Validate event duration
+    validate_duration(&event.start_date, event.duration).expect("Invalid event duration");
+    // Parse start date and get current timestamp
+    let timestamp = parse_date(&event.start_date).expect("Failed to parse date");
+    // Generate unique event id (current timestamp)
+    let event_id = api::time() as EventId;
+    // Write event data to canister storage
+    api::write(&event.name, timestamp);
+    // Return the event id
+    event_id
+}
+
+// Update function to remove an event
+#[update(name = "removeEvent")]
+fn remove_event(event_id: EventId) {
+    // Convert event id to string and remove corresponding entry from storage
+    api::remove(&event_id.to_string());
+}
+
+// Main function
+fn main() {
+    // Associate the update and query functions with the canister
+    over_async(add_event);
+    over_async(remove_event);
+    over(get_events);
+}
